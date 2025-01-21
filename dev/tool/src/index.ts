@@ -75,6 +75,7 @@ import path from 'path'
 
 import { buildStorageFromConfig, createStorageFromConfig, storageConfigFromEnv } from '@hcengineering/server-storage'
 import { program, type Command } from 'commander'
+import { addControlledDocumentRank } from './qms'
 import { clearTelegramHistory } from './telegram'
 import { diffWorkspace, recreateElastic, updateField } from './workspace'
 
@@ -1193,13 +1194,17 @@ export function devTool (
 
   program
     .command('copy-s3-datalake')
-    .description('migrate files from s3 to datalake')
+    .description('copy files from s3 to datalake')
     .option('-w, --workspace <workspace>', 'Selected workspace only', '')
     .option('-c, --concurrency <concurrency>', 'Number of files being processed concurrently', '10')
-    .action(async (cmd: { workspace: string, concurrency: string }) => {
+    .option('-s, --skip <number>', 'Number of workspaces to skip', '0')
+    .option('-e, --existing', 'Copy existing blobs', false)
+    .action(async (cmd: { workspace: string, concurrency: string, existing: boolean, skip: string }) => {
       const params = {
-        concurrency: parseInt(cmd.concurrency)
+        concurrency: parseInt(cmd.concurrency),
+        existing: cmd.existing
       }
+      const skip = parseInt(cmd.skip)
 
       const storageConfig = storageConfigFromEnv(process.env.STORAGE)
 
@@ -1222,14 +1227,37 @@ export function devTool (
         workspaces = workspaces
           .filter((p) => isActiveMode(p.mode) || isArchivingMode(p.mode))
           .filter((p) => cmd.workspace === '' || p.workspace === cmd.workspace)
-          .sort((a, b) => b.lastVisit - a.lastVisit)
+          // .sort((a, b) => b.lastVisit - a.lastVisit)
+          .sort((a, b) => {
+            if (a.backupInfo !== undefined && b.backupInfo !== undefined) {
+              return b.backupInfo.blobsSize - a.backupInfo.blobsSize
+            } else if (b.backupInfo !== undefined) {
+              return 1
+            } else if (a.backupInfo !== undefined) {
+              return -1
+            } else {
+              return b.lastVisit - a.lastVisit
+            }
+          })
       })
 
       const count = workspaces.length
+      console.log('found workspaces', count)
+
       let index = 0
       for (const workspace of workspaces) {
         index++
-        toolCtx.info('processing workspace', { workspace: workspace.workspace, index, count })
+        if (index <= skip) {
+          toolCtx.info('processing workspace', { workspace: workspace.workspace, index, count })
+          continue
+        }
+
+        toolCtx.info('processing workspace', {
+          workspace: workspace.workspace,
+          index,
+          count,
+          blobsSize: workspace.backupInfo?.blobsSize ?? 0
+        })
         const workspaceId = getWorkspaceId(workspace.workspace)
 
         for (const config of storages) {
@@ -2079,6 +2107,55 @@ export function devTool (
         const { dbUrl } = prepareTools()
         await updateDataWorkspaceIdToUuid(toolCtx, db, dbUrl, cmd.dryrun)
       })
+    })
+
+  program
+    .command('add-controlled-doc-rank-mongo')
+    .description('add rank to controlled documents')
+    .option('-w, --workspace <workspace>', 'Selected workspace only', '')
+    .action(async (cmd: { workspace: string }) => {
+      const { version } = prepareTools()
+
+      let workspaces: Workspace[] = []
+      await withAccountDatabase(async (db) => {
+        workspaces = await listWorkspacesPure(db)
+        workspaces = workspaces
+          .filter((p) => isActiveMode(p.mode))
+          .filter((p) => cmd.workspace === '' || p.workspace === cmd.workspace)
+          .sort((a, b) => b.lastVisit - a.lastVisit)
+      })
+
+      console.log('found workspaces', workspaces.length)
+
+      const mongodbUri = getMongoDBUrl()
+      const client = getMongoClient(mongodbUri)
+      const _client = await client.getClient()
+
+      try {
+        const count = workspaces.length
+        let index = 0
+        for (const workspace of workspaces) {
+          index++
+
+          toolCtx.info('processing workspace', {
+            workspace: workspace.workspace,
+            version: workspace.version,
+            index,
+            count
+          })
+
+          if (workspace.version === undefined || !deepEqual(workspace.version, version)) {
+            console.log(`upgrade to ${versionToString(version)} is required`)
+            continue
+          }
+          const workspaceId = getWorkspaceId(workspace.workspace)
+          const wsDb = getWorkspaceMongoDB(_client, { name: workspace.workspace })
+
+          await addControlledDocumentRank(toolCtx, wsDb, workspaceId)
+        }
+      } finally {
+        client.close()
+      }
     })
 
   extendProgram?.(program)

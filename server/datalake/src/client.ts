@@ -90,9 +90,9 @@ export class DatalakeClient {
   async listObjects (
     ctx: MeasureContext,
     workspace: WorkspaceId,
-    cursor: string | undefined
+    cursor: string | undefined,
+    limit: number = 100
   ): Promise<ListObjectOutput> {
-    const limit = 100
     const path = `/blob/${workspace.name}`
     const url = new URL(concatLink(this.endpoint, path))
     url.searchParams.append('limit', String(limit))
@@ -466,8 +466,8 @@ export class DatalakeClient {
       const response = await fetchSafe(ctx, url, { method: 'POST', body })
       return (await response.json()) as MultipartUploadPart
     } catch (err: any) {
-      ctx.error('failed to abort multipart upload', { workspace, objectName, err })
-      throw new DatalakeError('Failed to abort multipart upload')
+      ctx.error('failed to upload multipart part', { workspace, objectName, err })
+      throw new DatalakeError('Failed to upload multipart part')
     }
   }
 

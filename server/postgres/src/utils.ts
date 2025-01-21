@@ -30,7 +30,7 @@ import core, {
 } from '@hcengineering/core'
 import { PlatformError, unknownStatus } from '@hcengineering/platform'
 import { type DomainHelperOperations } from '@hcengineering/server-core'
-import postgres from 'postgres'
+import postgres, { type Options } from 'postgres'
 import {
   addSchema,
   type DataType,
@@ -54,6 +54,8 @@ process.on('exit', () => {
 
 const clientRefs = new Map<string, ClientRef>()
 const loadedDomains = new Set<string>()
+
+let loadedTables = new Set<string>()
 
 export async function retryTxn (
   pool: postgres.Sql,
@@ -83,39 +85,51 @@ export async function createTables (
     return
   }
   const mapped = filtered.map((p) => translateDomain(p))
-  const inArr = mapped.map((it) => `'${it}'`).join(', ')
-  const tables = await ctx.with('load-table', {}, () =>
-    client.unsafe(`
+  const t = Date.now()
+  loadedTables =
+    loadedTables.size === 0
+      ? new Set(
+        (
+          await ctx.with('load-table', {}, () =>
+            client.unsafe(`
     SELECT table_name 
-    FROM information_schema.tables 
-    WHERE table_name IN (${inArr})
-  `)
-  )
+    FROM information_schema.tables
+    WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+    AND table_name NOT LIKE 'pg_%'`)
+          )
+        ).map((it) => it.table_name)
+      )
+      : loadedTables
+  console.log('load-table', Date.now() - t)
 
-  const exists = new Set(tables.map((it) => it.table_name))
-
-  await retryTxn(client, async (client) => {
-    const domainsToLoad = mapped.filter((it) => exists.has(it))
-    if (domainsToLoad.length > 0) {
-      await ctx.with('load-schemas', {}, () => getTableSchema(client, domainsToLoad))
-    }
-    for (const domain of mapped) {
-      if (!exists.has(domain)) {
-        await ctx.with('create-table', {}, () => createTable(client, domain))
-      }
+  const domainsToLoad = mapped.filter((it) => loadedTables.has(it))
+  if (domainsToLoad.length > 0) {
+    await ctx.with('load-schemas', {}, () => getTableSchema(client, domainsToLoad))
+  }
+  const domainsToCreate: string[] = []
+  for (const domain of mapped) {
+    if (!loadedTables.has(domain)) {
+      domainsToCreate.push(domain)
+    } else {
       loadedDomains.add(url + domain)
     }
-  })
+  }
+
+  if (domainsToCreate.length > 0) {
+    await retryTxn(client, async (client) => {
+      for (const domain of domainsToCreate) {
+        await ctx.with('create-table', {}, () => createTable(client, domain))
+        loadedDomains.add(url + domain)
+      }
+    })
+  }
 }
 
 async function getTableSchema (client: postgres.Sql, domains: string[]): Promise<void> {
-  const res = await client.unsafe(
-    `SELECT column_name, data_type, is_nullable, table_name
+  const res = await client.unsafe(`SELECT column_name::name, data_type::text, is_nullable::text, table_name::name
             FROM information_schema.columns
-            WHERE table_name = ANY($1) and table_schema = 'public' 
-            ORDER BY table_name, ordinal_position ASC;`,
-    [domains]
-  )
+            WHERE table_name IN (${domains.map((it) => `'${it}'`).join(', ')}) and table_schema = 'public'::name  
+            ORDER BY table_name::name, ordinal_position::int ASC;`)
 
   const schemas: Record<string, Schema> = {}
   for (const column of res) {
@@ -266,6 +280,27 @@ export class ClientRef implements PostgresClientReference {
   }
 }
 
+export let dbExtraOptions: Partial<Options<any>> = {}
+export function setDBExtraOptions (options: Partial<Options<any>>): void {
+  dbExtraOptions = options
+}
+
+export function getPrepare (): { prepare: boolean } {
+  return { prepare: dbExtraOptions.prepare ?? false }
+}
+
+export interface DBExtraOptions {
+  useCF: boolean
+}
+
+export let dbExtra: DBExtraOptions = {
+  useCF: false
+}
+
+export function setExtraOptions (options: DBExtraOptions): void {
+  dbExtra = options
+}
+
 /**
  * Initialize a workspace connection to DB
  * @public
@@ -285,6 +320,11 @@ export function getDBClient (connectionString: string, database?: string): Postg
       transform: {
         undefined: null
       },
+      debug: false,
+      notice: false,
+      onnotice (notice) {},
+      onparameter (key, value) {},
+      ...dbExtraOptions,
       ...extraOptions
     })
 
@@ -374,7 +414,7 @@ export function inferType (val: any): string {
     return '::boolean'
   }
   if (Array.isArray(val)) {
-    const type = inferType(val[0])
+    const type = inferType(val[0] ?? val[1])
     if (type !== '') {
       return type + '[]'
     }

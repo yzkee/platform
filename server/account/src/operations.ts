@@ -16,7 +16,6 @@
 import { Analytics } from '@hcengineering/analytics'
 import contact, {
   AvatarType,
-  buildGravatarId,
   checkHasGravatar,
   combineName,
   Employee,
@@ -95,6 +94,10 @@ import {
 } from './utils'
 import { getWorkspaceDestroyAdapter } from '@hcengineering/server-pipeline'
 
+import MD5 from 'crypto-js/md5'
+function buildGravatarId (email: string): string {
+  return MD5(email.trim().toLowerCase()).toString()
+}
 /**
  * @public
  */
@@ -504,7 +507,7 @@ export async function selectWorkspace (
       const result: WorkspaceLoginInfo = {
         endpoint: '',
         email,
-        token: '',
+        token: generateToken(email, getWorkspaceId(workspaceInfo.workspace), getExtra(accountInfo)),
         workspace: workspaceUrl,
         workspaceId: workspaceInfo.workspace,
         mode: workspaceInfo.mode,
