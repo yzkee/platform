@@ -13,27 +13,47 @@
 // limitations under the License.
 // -->
 <script lang="ts">
-  import { getJsonOrEmpty, type LinkPreviewDetails, canDisplayLinkPreview } from '@hcengineering/presentation'
+  import { getJsonOrEmpty, type LinkPreviewDetails } from '@hcengineering/presentation'
   import { type Attachment } from '@hcengineering/attachment'
   import { type WithLookup } from '@hcengineering/core'
   import { Spinner } from '@hcengineering/ui'
   import WebIcon from './icons/Web.svelte'
+  import { onMount } from 'svelte'
 
   export let attachment: WithLookup<Attachment>
   let useDefaultIcon = false
+  let retryCount = 0
   let viewModel: LinkPreviewDetails
-  let canDisplay = false
+  let previewImageSrc: string | undefined
 
-  void getJsonOrEmpty(attachment.file, attachment.name).then((res) => {
-    viewModel = res as LinkPreviewDetails
-    canDisplay = canDisplayLinkPreview(viewModel)
+  function refreshPreviewImage (): void {
+    if (viewModel?.image === undefined) {
+      return
+    }
+    if (retryCount > 3) {
+      previewImageSrc = undefined
+      return
+    }
+    retryCount++
+    previewImageSrc = `${viewModel.image}#${Date.now()}`
+  }
+
+  onMount(() => {
+    void getJsonOrEmpty(attachment.file, attachment.name)
+      .then((res) => {
+        viewModel = res as LinkPreviewDetails
+        refreshPreviewImage()
+      })
+      .catch((err) => {
+        console.error(err)
+      })
   })
 </script>
 
 <div class="quote content">
-  {#if canDisplay}
+  {#if viewModel}
     <div class="gapV-2">
-      <div class="flex gap-1">
+      <div class="flex-row-center gap-1">
         {#if viewModel.icon !== undefined && !useDefaultIcon}
           <img
             src={viewModel.icon}
@@ -58,9 +78,16 @@
           {#if viewModel.description}
             {viewModel.description}
           {/if}
-          {#if viewModel.image}
+          {#if previewImageSrc}
             <a target="_blank" href={viewModel.url}>
-              <img src={viewModel.image} class="round-image" alt="link-preview" />
+              <img
+                src={previewImageSrc}
+                class="round-image"
+                alt="link-preview"
+                on:error={() => {
+                  refreshPreviewImage()
+                }}
+              />
             </a>
           {/if}
         </div>
@@ -81,14 +108,15 @@
     max-height: 25rem;
   }
   .preview-icon {
-    max-width: 22px;
-    max-height: 22px;
+    max-width: 16px;
+    max-height: 16px;
   }
   .quote {
     border-left: 0.25rem solid;
-    padding-left: 15px;
+    padding-left: 0.75rem;
   }
   .content {
+    scroll-snap-align: start;
     max-width: 35rem;
     max-height: 35rem;
   }

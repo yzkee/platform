@@ -14,7 +14,18 @@
 -->
 <script lang="ts">
   import { Attachment } from '@hcengineering/attachment'
-  import { Account, Class, Doc, IdMap, Markup, RateLimiter, Ref, Space, generateId, toIdMap } from '@hcengineering/core'
+  import {
+    Class,
+    Doc,
+    IdMap,
+    Markup,
+    PersonId,
+    RateLimiter,
+    Ref,
+    Space,
+    generateId,
+    toIdMap
+  } from '@hcengineering/core'
   import { Asset, IntlString, setPlatformStatus, unknownError } from '@hcengineering/platform'
   import {
     DraftController,
@@ -190,7 +201,7 @@
         _class: attachment.class.Attachment,
         collection: 'attachments',
         modifiedOn: 0,
-        modifiedBy: '' as Ref<Account>,
+        modifiedBy: '' as PersonId,
         space,
         attachedTo: objectId,
         attachedToClass: _class,
@@ -333,7 +344,7 @@
     const hrefs = refContainer.getElementsByTagName('a')
     const newUrls: string[] = []
     for (let i = 0; i < hrefs.length; i++) {
-      if (hrefs[i].target !== '_blank' || !isValidUrl(hrefs[i].href)) {
+      if (hrefs[i].target !== '_blank' || !isValidUrl(hrefs[i].href) || hrefs[i].rel === '') {
         continue
       }
       const key = getUrlKey(hrefs[i].href)
@@ -363,7 +374,7 @@
         if (canDisplayLinkPreview(meta) && meta.url !== undefined) {
           const blob = new Blob([JSON.stringify(meta)])
           const file = new File([blob], meta.url, { type: 'application/link-preview' })
-          void createAttachment(file)
+          await createAttachment(file)
         }
       } catch (err: any) {
         void setPlatformStatus(unknownError(err))
